@@ -235,6 +235,7 @@ jobs:
 
 ## Related docs
 
+- [Sentry error tracking and PII scrubbing](./SENTRY.md) — verify the DSN and redaction policy before enabling error reporting in production.
 - [Grafana dashboards & metrics](./grafana/README.md)
 - [Setup guide](./SETUP.md)
 - [Architecture](./ARCHITECTURE.md)

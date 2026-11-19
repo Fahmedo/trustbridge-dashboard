@@ -211,3 +211,28 @@ The offline recheck queue in `src/lib/` is covered by tests under `tests/`:
 
 - **Happy path**: a recheck queued while offline is flushed on the `online` event and removed from persisted state after a `2xx`.
 - **Failure path**: a malformed queue entry (or a `4xx` response) is discarded and surfaces a stable error instead of looping.
+
+---
+
+## Offline mutation disable contract (#690)
+
+Critical mutations must not be started while the offline banner is visible. The
+canonical state table is the non-test fixture module
+`tests/fixtures/offline-mutation-fixtures.ts`; it is the single place to update
+when a new privileged button is added to the dashboard.
+
+| Acceptance point | Fixture entry | Scenario assertion |
+| --- | --- | --- |
+| Offline is visible to the user | `OFFLINE_MUTATION_STATES` (`offline`) | Set `navigator.onLine = false`, dispatch `offline`, assert `data-testid="offline-banner"` is visible. |
+| Critical mutations are disabled offline | `OFFLINE_MUTATION_STATES.offline.buttons` | For each entry, find the button by accessible `label` and assert the native `disabled` attribute; assert its `mutationEndpoint` is never requested. |
+| Controls recover on reconnect | `OFFLINE_MUTATION_STATES` (`online`) | Dispatch `online`; the banner disappears and every listed button is enabled again. |
+| Reads are unaffected | `mutationsAllowed` applies to writes only | Contributor reads still resolve while the mutation buttons are disabled. |
+| Queued work is replayed exactly once | `RECONNECT_SCENARIO` | On reconnect, the fake queued entry (address + idempotency key) is POSTed in FIFO order, removed after `2xx`, and retained on a network error. |
+| Mid-flight disconnect leaves no partial state | `MID_FLIGHT_DISCONNECT_SCENARIO` | No new mutation starts while offline; no privileged half-state is committed. |
+
+The observable seams are the existing `data-testid="offline-banner"` hook and
+the buttons' native `disabled` state. Locate buttons by accessible name (the
+fixture's `label` values) rather than by user-visible copy, which is under
+revision. `OfflineBanner.forceOffline` is available for deterministic
+component-level rendering; E2E scenarios should use the real `online` /
+`offline` events so the event wiring is exercised too.

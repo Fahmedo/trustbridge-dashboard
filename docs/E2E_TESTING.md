@@ -151,4 +151,23 @@ Test ids currently relied on:
 | `trustline-guidance` | `src/components/TrustlineGuidancePanel.tsx` |
 | `freighter-proof-card`, `freighter-detection-status`, `freighter-challe
 
+## Offline mutation disable contract (#690)
+
+The maintainer journey is the place to attach the offline assertions until a
+dedicated spec is added. The state table and expected button states come from
+`tests/fixtures/offline-mutation-fixtures.ts` (a non-test fixture module), so a
+new critical mutation button can be added in one place:
+
+| Fixture entry | E2E step |
+| --- | --- |
+| `OFFLINE_MUTATION_STATES.offline` | `page.context().setOffline(true)` (or route `navigator.onLine` via `addInitScript`), dispatch `offline`, assert `offline-banner` is visible and every `buttons[].label` is `disabled`; assert no request reaches any `mutationEndpoint`. |
+| `OFFLINE_MUTATION_STATES.online` | Restore connectivity, dispatch `online`, assert the banner is gone and the same buttons are enabled. |
+| `RECONNECT_SCENARIO` | Queue the fake entry while offline; on reconnect assert one FIFO replay of the idempotency key, removal after `2xx`, and retention after a network error. |
+| `MID_FLIGHT_DISCONNECT_SCENARIO` | Disconnect during an in-flight recheck and assert no new mutation starts and no partial privileged state is written. |
+
+Use role-and-name selectors built from the fixture's `label` values. Do not
+match on button copy. `OfflineBanner.forceOffline` is for component rendering
+only; E2E should drive the real browser events. See `docs/PWA.md` for the
+user-facing contract and the service-worker invariants behind it.
+
 /* … truncated 691 chars — edit only what you need near the top … */

@@ -406,3 +406,77 @@ key auth, extend the matrix tests rather than adding ad-hoc assertions.
 - Only a masked prefix of a key may appear in operator-facing output.
 - Existing pause and happy-path semantics are preserved; this matrix only
 defines which credential is honored when multiple are present.
+
+---
+
+## Rotation drill runbook (#693)
+
+### What exists today — read this first
+
+`src/lib/api-key-crypto.ts` generates `tb_<43 url-safe base64 chars>` and
+computes a plain SHA-256 hex digest. `src/lib/api-key-auth.ts` hashes the
+incoming bearer token, looks up `ApiKey.keyHash` with a unique query, then
+checks revocation, expiry, scope, rate limit, and `lastUsedAt`.
+
+There is **no ciphertext, no wrapping key, no key-version column, and no
+envelope encryption** in the current code. Do not describe a current deployment
+as having a wrapping key. Consequently "rotation" today means one of two
+things:
+
+1. **Credential rotation (supported now).** Create a new key, deploy the new
+   secret to clients, then revoke the old key. Revocation is effective on the
+   next request (`revokedAt`); a lost raw key cannot be recovered.
+2. **Digest/algorithm migration (drill only).** Move from `digest-v1`
+   (`sha256(raw)`) to a versioned digest with a dual-read window. This is the
+   scenario modeled by `tests/fixtures/api-key-rotation-fixtures.ts`; it is not
+   implemented yet.
+
+### Digest-version migration (future, dual-read window)
+
+1. Add the new digest column/index while continuing to write the legacy
+   `keyHash`. Deploy code that computes both digests for an incoming key.
+2. During the window, accept a key when **either** digest resolves to an active
+   row. The decision table `DUAL_READ_DECISION_TABLE` in the fixture module is
+   authoritative: legacy-only hit → accept and opportunistically write the new
+   digest; current-only hit → accept; both hits for the **same** key id → accept
+   once, prefer current; both hits for **different** key ids → fail closed and
+   alert; no hit → `401 invalid_api_key`; revoked/expired hit → keep the
+   existing audit reason and never rewrite a non-active key.
+3. Backfill the new digest in bounded batches, recording progress so a failure
+   can resume without rewriting the same rows twice.
+4. Verify no active row still lacks the new digest, soak for the agreed window,
+   then drop the legacy read path and column in a later deploy.
+
+### Future wrapping-key design (not implemented)
+
+If ciphertext ever replaces digest-only storage, store the wrapping key id and
+ciphertext alongside the row. Hypothetical configuration (not present today):
+`API_KEY_ACTIVE_WRAPPING_KEY_ID` for new writes and a read set such as
+`API_KEY_WRAPPING_KEY_IDS=wrap-v1,wrap-v2`. New writes use the active key;
+reads try the row's recorded key id first and fall back to the dual-read set.
+Rewrap procedure:
+
+1. Deploy dual-key **read** support before any rewrap writes.
+2. Switch writes to the new key id (`WRAPPING_KEY_ROTATION_FIXTURE.drillSteps`).
+3. Rewrap active rows in batches; unrewrapped rows stay readable under the old
+   id. Do not rewrap revoked or expired rows.
+4. Confirm every active row reports the new id, soak, then remove the old id
+   from the read set and destroy it only after no row references it.
+
+### Failure modes and rollback
+
+- **Partial rewrap** — rows still reference the old version. Dual-read keeps
+  them usable; resume from the last committed batch id.
+- **Old version removed too early** — valid keys return `401
+  invalid_api_key`. Restore the old id to the read set from secret storage,
+  then re-run the batch. See `ROTATION_FAILURE_MODES` in the fixture module.
+- **Ambiguous dual-read match** — two distinct key ids match one raw key. Fail
+  closed, alert operators, and rewrite neither row.
+- **Rollback** — keep both versions readable, revert the active write version,
+  and leave already-rewrapped rows in place (they remain readable while both
+  ids are in the read set). Never delete a version while any row references it.
+- **No partial privileged state** — a failed migration must not revoke keys or
+  change scopes; only the digest/ciphertext representation may change.
+
+All fixture values in `tests/fixtures/api-key-rotation-fixtures.ts` are fake;
+never paste a real key or digest into the fixtures or this document.

@@ -121,3 +121,7 @@ This tooling **does not** rotate credentials. If malware was confirmed on a mach
 1. Stop using that machine for privileged work.
 2. From a clean device, rotate GitHub, npm, cloud, SSH, wallet, and CI secrets.
 3. Review recent publishes and force-pushes on your accounts.
+
+For the separate question of what dashboard errors may contain, see
+[Sentry error tracking and PII scrubbing](./SENTRY.md) — the scrubber runs in
+`src/lib/sentry.ts` before any event leaves the process.

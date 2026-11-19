@@ -14,6 +14,7 @@ degrades to a silent no-op — so local development and CI never require a DSN.
 - [Environment variables](#environment-variables)
 - [Using the helpers](#using-the-helpers)
 - [Redaction](#redaction)
+- [Operator guidance](#operator-guidance)
 - [Instrumented routes](#instrumented-routes)
 - [Source maps (optional)](#source-maps-optional)
 - [Testing](#testing)
@@ -220,10 +221,22 @@ Host names, ports, database names, status codes, timings, and ordinary
 diagnostic text are deliberately **kept** — they are the part that makes an
 event worth having.
 
-Additionally, any context key named `accessToken`, `refreshToken`,
-`authorization`, `cookie`, `password`, `secret`, `token`, `apiKey`,
-`sessionToken`, or `tokenEncryptionKey` (case-insensitive, with or without
-underscores) has its value dropped wholesale, whatever the value looks like.
+The patterns are deliberately shape-based: GitHub tokens need 20+ characters
+after their prefix, Stellar keys are 56-character base32 (`G…` / `S…`), bearer
+and token header values need 12+ characters, and credential-in-URL redaction
+requires `scheme://user:password@host`. If a value does not match a shape, it
+is **not** removed by the string rules — use a sensitive context key instead.
+
+Any context key whose lowercased name is in `SENSITIVE_KEYS` has its value
+replaced with `[redacted]` wholesale, regardless of shape:
+
+`accesstoken`, `access_token`, `refreshtoken`, `refresh_token`, `authorization`,
+`cookie`, `password`, `secret`, `token`, `apikey`, `api_key`, `sessiontoken`,
+`session_token`, `tokenencryptionkey`, `token_encryption_key`.
+
+Keys are matched case-insensitively after lowercasing, so `Authorization`,
+`apiKey`, and `SESSION_TOKEN` are all covered. The key itself is kept so the
+event still shows *which* field was present.
 
 ### What is deliberately kept
 
@@ -234,13 +247,40 @@ Stellar address in either field.
 
 ### Traversal safety
 
-Context objects are walked recursively to a depth of 6, after which the value
-becomes `[redacted:max-depth]`. `Error` instances are **cloned**, not mutated,
-so a handler that reports an error and then logs or rethrows it still has the
-original message. Cyclic objects are safe.
+Context objects are walked recursively; the root is depth 0 and any value at
+depth greater than 6 becomes `[redacted:max-depth]`. This bounds cyclic or
+pathological objects without changing ordinary diagnostic payloads.
+`Error` instances are **cloned**, not mutated, so a handler that reports an
+error and then logs or rethrows it still has the original message.
 
 Redaction never throws: a reporting path that can crash the request it was
 meant to observe is worse than no reporting at all.
+
+---
+
+## Operator guidance
+
+The scrubber lives in **`src/lib/sentry.ts`** (`REDACTION_RULES`,
+`SENSITIVE_KEYS`, `MAX_REDACT_DEPTH`), not in `src/lib/error-handling.ts`, which
+only defines API error envelopes and classifiers. Application code imports the
+helpers from `@/lib/sentry` and passes raw errors: redaction happens on the way
+out, at that single choke point.
+
+- Do not add a second scraper at a call site; update `REDACTION_RULES` or
+  `SENSITIVE_KEYS` here so every route benefits.
+- Put request-derived bags under a sensitive key (for example `apiKey` or
+  `cookie`) when the value is high-risk regardless of shape.
+- Never place an email, Stellar address, or token in `user.id` or
+  `user.username`: those two fields are intentionally passed through to
+  Sentry's user model.
+- When adding a pattern, extend
+  `tests/fixtures/sentry-redaction-fixtures.ts` with a fake input and its exact
+  expected output. Those fixtures are the canonical list of scrubbed shapes:
+  GitHub PATs, Stellar G/S keys, credentials in URLs, bearer/token headers,
+  emails, sensitive context keys, and the depth cap.
+- Treat an event containing a real address or token as an incident: rotate the
+  exposed credential and use Sentry's server-side scrubbing as a second layer,
+  not as a replacement for this one.
 
 ---
 
@@ -351,10 +391,12 @@ No. The SDK is an optional peer dependency. Tests run against the no-op stub
 when the DSN is absent, which is the default in CI.
 
 **Q: Will Sentry capture PII (Stellar addresses, GitHub usernames)?**
-Only if you pass them explicitly in `context` / `tags`. The default SDK
-configuration scrubs common PII patterns; review Sentry's
+Stellar addresses/seeds, emails, tokens, and credential URLs are scrubbed by
+`src/lib/sentry.ts` before events are sent. `user.username` is intentionally
+passed through — use a GitHub username there, never an email or address.
+Review Sentry's
 [data scrubbing](https://docs.sentry.io/product/data-management-settings/scrubbing/)
-settings for your project.
+settings as a second layer for your project.
 
 **Q: Can I use Sentry on the Edge runtime?**
 Yes. `@sentry/nextjs` supports the Edge runtime via `sentry.edge.config.ts`.

@@ -124,3 +124,17 @@ When operators need to re-index or re-sync Soroban events from a specific ledger
    DELETE FROM "SorobanEventCursor"
    WHERE "maintainerOrgId" = '<maintainer_org>' AND "eventType" = 'contract';
    ```
+
+---
+
+## Appendix: Conflict resolution and API-key rotation drills (#692/#693)
+
+- **Conflicts** — `GET /api/maintainer/conflicts` now returns
+  `{ conflicts, pagination }` with stable `createdAt DESC, id ASC` ordering and
+  validated `page` / `pageSize` (defaults 1/25, cap 100). See
+  [MAINTAINER_CONFLICTS.md](./MAINTAINER_CONFLICTS.md) for the two-users-one-wallet
+  resolution workflow and [the conflict fixtures](../tests/fixtures/maintainer-conflict-fixtures.ts).
+- **API keys** — the credential rotation today is create-new → deploy → revoke;
+  there is no ciphertext or wrapping key in `src/lib/api-key-crypto.ts`. See
+  [API_KEYS.md](./API_KEYS.md#rotation-drill-runbook-693) for the digest-version
+  dual-read drill and the explicitly future wrapping-key rewrap procedure.

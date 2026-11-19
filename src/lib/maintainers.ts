@@ -201,22 +201,36 @@ export async function recordRegistrationConflict(input: {
   return conflict;
 }
 
+/** Shared org scope for conflict reads; an absent org keeps the legacy unscoped read. */
+function conflictWhere(maintainerOrgId?: string): Prisma.RegistrationConflictWhereInput {
+  return maintainerOrgId ? { maintainerOrgId } : {};
+}
+
 /**
  * Lists open registration conflicts scoped by maintainerOrgId.
+ *
+ * `createdAt` alone is not unique, so `id` is the tie-breaker: the resulting
+ * order is stable across pages even when several claims share a timestamp.
  */
 export async function listRegistrationConflicts(options?: {
   maintainerOrgId?: string;
   limit?: number;
+  skip?: number;
 }): Promise<ConflictSummary[]> {
-  const where: Prisma.RegistrationConflictWhereInput = {};
-  if (options?.maintainerOrgId) {
-    where.maintainerOrgId = options.maintainerOrgId;
-  }
-
   return prisma.registrationConflict.findMany({
-    where: Object.keys(where).length > 0 ? where : undefined,
-    orderBy: { createdAt: "desc" },
+    where: conflictWhere(options?.maintainerOrgId),
+    orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+    skip: options?.skip ?? 0,
     take: options?.limit ?? 100,
+  });
+}
+
+/** Total number of conflicts in scope, for pagination metadata. */
+export async function countRegistrationConflicts(options?: {
+  maintainerOrgId?: string;
+}): Promise<number> {
+  return prisma.registrationConflict.count({
+    where: conflictWhere(options?.maintainerOrgId),
   });
 }
 
